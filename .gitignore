@@ -1,3 +1,4 @@
 vendor/
 internal/config/config.json
 whatsapp.db
+.vscode/
