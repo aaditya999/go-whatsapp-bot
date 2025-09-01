@@ -3,16 +3,33 @@ package whatsapp
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
+	"time"
 
+	"github.com/aaditya999/go-whatsapp-bot/internal/config"
 	"go.mau.fi/whatsmeow"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
+var processedCount int
+
 type WhatsAppClient struct {
-	client *whatsmeow.Client
+	client         *whatsmeow.Client
+	eventHandlerID uint32
+	config         *config.Config
+}
+
+func getConfig() *config.Config {
+	cfg, err := config.LoadConfig("internal/config/config.json")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	return cfg
 }
 
 func NewWhatsAppClient(dbContainer *sqlstore.Container) (*WhatsAppClient, error) {
@@ -21,7 +38,8 @@ func NewWhatsAppClient(dbContainer *sqlstore.Container) (*WhatsAppClient, error)
 		return nil, err
 	}
 	client := whatsmeow.NewClient(deviceStore, nil)
-	return &WhatsAppClient{client: client}, nil
+	cfg := getConfig()
+	return &WhatsAppClient{client: client, config: cfg}, nil
 }
 
 func (wac *WhatsAppClient) Login(ctx context.Context) error {
@@ -43,6 +61,10 @@ func (wac *WhatsAppClient) Login(ctx context.Context) error {
 	return nil
 }
 
+func (wac *WhatsAppClient) Logout(ctx context.Context) {
+	wac.client.Disconnect()
+}
+
 func (wac *WhatsAppClient) GetJoinedGroups() {
 	groups, err := wac.client.GetJoinedGroups()
 	if err != nil {
@@ -61,7 +83,30 @@ func (wac *WhatsAppClient) SendMessage(ctx context.Context, groupID string, mess
 	if err != nil {
 		fmt.Errorf("Error sending message: %v", err)
 	} else {
-		fmt.Print("Message sent (server timestamp: %s)", resp.Timestamp)
+		fmt.Printf("Message sent (server timestamp: %s)", resp.Timestamp)
 	}
 	return nil
+}
+
+func (wac *WhatsAppClient) Register() {
+	wac.eventHandlerID = wac.client.AddEventHandler(wac.myEventHandler)
+}
+
+func (wac *WhatsAppClient) myEventHandler(evt interface{}) {
+	switch v := evt.(type) {
+	case *events.Message:
+		processedCount++
+		fmt.Printf("Processed %d messages. Latest timestamp: %v (%s)\n", processedCount, v.Info.Timestamp, v.Info.Timestamp.Format(time.RFC3339))
+		// Only respond to messages in the target group
+		chatJID := v.Info.MessageSource.Chat.String()
+		if chatJID == wac.config.GroupChatID {
+			conv := v.Message.GetConversation()
+			fmt.Println("Received a message!", conv)
+			if conv == "/speak" {
+				// Respond with a message
+				groupId := strings.TrimSuffix(chatJID, "@g.us")
+				go wac.SendMessage(context.Background(), groupId, "Bhow bhow")
+			}
+		}
+	}
 }
